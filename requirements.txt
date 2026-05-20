@@ -1,0 +1,34 @@
+# Core Framework
+fastapi>=0.115.5
+uvicorn[standard]>=0.32.0
+streamlit>=1.40.1
+pydantic>=2.9.2
+python-dotenv>=1.0.1
+python-multipart>=0.0.12
+
+# LangChain + LangGraph
+langchain>=0.3.7
+langchain-openai>=0.2.8
+langchain-community>=0.3.7
+langchain-chroma>=0.1.4
+langgraph>=0.2.50
+
+# Vector Store
+chromadb>=0.5.18
+
+# Memory
+mem0ai>=0.1.29
+
+# Database
+sqlalchemy>=2.0.36
+
+# Document Loading
+pypdf>=5.1.0
+docx2txt>=0.8
+
+# Utilities
+httpx>=0.27.2
+requests>=2.32.3
+
+# Numpy - explicitly get latest for Python 3.14 compatibility
+numpy>=2.0.0

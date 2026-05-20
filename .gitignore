@@ -1,0 +1,9 @@
+.env
+venv/
+_repos/
+chroma_db/
+mem0_db/
+__pycache__/
+*.pyc
+*.sqlite3
+support_copilot.db
