@@ -1,1 +1,1 @@
-from backend.routers import tickets, agent, knowledge, memory
+# intentionally empty — routers imported in main.py

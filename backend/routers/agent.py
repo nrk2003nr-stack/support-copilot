@@ -1,3 +1,5 @@
+from backend.db.models import AgentRunLog
+import time
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 import json
@@ -25,6 +27,16 @@ def generate_ai_response(ticket_id: int, db: Session = Depends(get_db)):
         ticket_subject=ticket.subject,
         ticket_description=ticket.description,
     )
+
+    # Log the agent run
+    log = AgentRunLog(
+        ticket_id=ticket_id,
+        action='generate_draft_response',
+        result=f'KB sources: {result["kb_sources"]}. Memory used: {result["memory_context"][:150]}',
+        duration_ms=None
+    )
+    db.add(log)
+    db.commit()
 
     ticket.ai_draft_response   = result["draft_response"]
     ticket.kb_sources_used     = json.dumps(result["kb_sources"])
