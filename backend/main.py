@@ -1,36 +1,83 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
 from typing import Optional
-import uuid, json, os
+import uuid, os
+import time
+from collections import defaultdict
 
 # Internal modules
-from database import engine, get_db
+from database import engine, get_db, migrate_sqlite_schema, SessionLocal
 import models
 from auth import auth_router, get_current_user
 from tickets import ticket_router
 from handoff import handoff_router
 from vision import vision_router
 from analytics import analytics_router
-from sentiment import analyze_sentiment, should_escalate
-from knowledge import search_knowledge_base
+from knowledge import knowledge_router
+from channels import channels_router
+from admin import admin_router
+from voice import voice_router
+from auth import hash_password
 
-# LangChain / LangGraph
-from langchain_openai import ChatOpenAI
-from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from mem0 import Memory
+# ── CHANGED: import run_agent from chat.py instead of inline LLM code ──
+
+# ── CHANGED: import schemas instead of defining them inline here ──
+from schemas import ChatRequest, ChatResponse
 
 # Create all tables
 models.Base.metadata.create_all(bind=engine)
+migrate_sqlite_schema()
+
+def seed_demo_data():
+    db = SessionLocal()
+    try:
+        if db.query(models.User).count() == 0:
+            users = [
+                models.User(email="customer@example.com", username="customer", hashed_password=hash_password("password123"), role="customer"),
+                models.User(email="agent@example.com", username="agent", hashed_password=hash_password("password123"), role="agent"),
+                models.User(email="admin@example.com", username="admin", hashed_password=hash_password("password123"), role="admin"),
+            ]
+            db.add_all(users)
+            db.commit()
+        if db.query(models.KnowledgeEntry).count() == 0:
+            db.add(models.KnowledgeEntry(
+                question="How do I reset my password?",
+                answer="Use the Forgot Password link on the login page, then follow the email instructions. If the email does not arrive within 10 minutes, check spam or open a ticket.",
+                status="approved",
+                product="account",
+                topic="login",
+                language="en",
+                source="seed",
+                added_to_chroma=False,
+            ))
+            db.commit()
+    finally:
+        db.close()
+
+if os.getenv("SEED_DEMO_DATA", "true").lower() == "true":
+    seed_demo_data()
 
 app = FastAPI(title="Support Copilot API", version="2.0.0")
+rate_buckets = defaultdict(list)
+
+@app.middleware("http")
+async def simple_rate_limit(request: Request, call_next):
+    limited_prefixes = ("/auth/login", "/auth/register", "/chat", "/channels/")
+    if request.url.path.startswith(limited_prefixes):
+        key = f"{request.client.host if request.client else 'local'}:{request.url.path}"
+        now = time.time()
+        rate_buckets[key] = [ts for ts in rate_buckets[key] if now - ts < 60]
+        limit = 30 if request.url.path.startswith("/chat") else 15
+        if len(rate_buckets[key]) >= limit:
+            return JSONResponse(status_code=429, content={"detail": "Too many requests"})
+        rate_buckets[key].append(now)
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Restrict in production to your domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -42,29 +89,21 @@ app.include_router(ticket_router)
 app.include_router(handoff_router)
 app.include_router(vision_router)
 app.include_router(analytics_router)
+app.include_router(knowledge_router)
+app.include_router(channels_router)
+app.include_router(admin_router)
+app.include_router(voice_router)
 
-# Core LLM setup
-llm = ChatOpenAI(model="gpt-4o", streaming=True)
-embeddings = OpenAIEmbeddings()
-vectorstore = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
-mem0_memory = Memory()
+# ── REMOVED: llm, embeddings, vectorstore, mem0_memory setup ──
+# These are now inside chat.py. main.py no longer needs them.
+
+# ── REMOVED: the inline ChatRequest and ChatResponse class definitions ──
+# They now live in schemas.py and are imported above.
+
 
 # ────────────────────────────────────────────
 # Chat endpoint
 # ────────────────────────────────────────────
-
-class ChatRequest(BaseModel):
-    message: str
-    session_id: Optional[str] = None
-    conversation_id: Optional[int] = None
-
-class ChatResponse(BaseModel):
-    reply: str
-    session_id: str
-    conversation_id: int
-    sentiment: dict
-    escalation_recommended: bool
-    sources: list[str]
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
@@ -72,6 +111,8 @@ async def chat(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    from chat import run_agent
+
     # 1. Session management
     session_id = req.session_id or str(uuid.uuid4())
 
@@ -85,102 +126,41 @@ async def chat(
     if not conv:
         conv = models.Conversation(
             user_id=current_user.id,
-            session_id=session_id
+            session_id=session_id,
+            ticket_id=req.ticket_id,
+            language=req.language or "en",
         )
         db.add(conv)
         db.commit()
         db.refresh(conv)
 
-    # 3. Sentiment analysis
-    sentiment = analyze_sentiment(req.message)
-
-    # 4. Save user message
-    user_msg = models.Message(
-        conversation_id=conv.id,
-        role="user",
-        content=req.message,
-        sentiment_score=sentiment["normalized"]
-    )
-    db.add(user_msg)
-    db.commit()
-
-    # 5. Check if escalation is needed
+    # 3. Get recent sentiment scores for escalation check
     recent_scores = [
         m.sentiment_score for m in db.query(models.Message)
-        .filter(models.Message.conversation_id == conv.id, models.Message.role == "user")
+        .filter(
+            models.Message.conversation_id == conv.id,
+            models.Message.role == "user"
+        )
         .order_by(models.Message.timestamp.desc()).limit(3).all()
         if m.sentiment_score is not None
     ]
-    escalation_needed = should_escalate(recent_scores)
 
-    # 6. Retrieve context from ChromaDB (RAG)
-    kb_results = search_knowledge_base(req.message)
-    vector_results = vectorstore.similarity_search(req.message, k=3)
-    context_docs = kb_results + [doc.page_content for doc in vector_results]
-    context_text = "\n\n".join(context_docs[:4]) if context_docs else "No relevant documents found."
-
-    # 7. Retrieve user memory from mem0
-    memories = mem0_memory.search(req.message, user_id=str(current_user.id))
-    memory_text = "\n".join([m["memory"] for m in memories[:3]]) if memories else ""
-
-    # 8. Build LangChain messages
-    system_prompt = f"""You are a helpful, empathetic support copilot.
-Use the following context from the knowledge base to answer accurately:
-
-KNOWLEDGE BASE CONTEXT:
-{context_text}
-
-USER MEMORY (past interactions):
-{memory_text}
-
-Rules:
-- Be concise, helpful, and friendly.
-- If you cannot resolve the issue, say so clearly and offer to create a support ticket.
-- If the user seems upset, acknowledge their frustration before answering.
-- If escalation is needed, mention that a human agent can help.
-"""
-
-    messages = [SystemMessage(content=system_prompt), HumanMessage(content=req.message)]
-    response = await llm.ainvoke(messages)
-    reply = response.content
-
-    # 9. Save assistant reply
-    assistant_msg = models.Message(
-        conversation_id=conv.id,
-        role="assistant",
-        content=reply
-    )
-    db.add(assistant_msg)
-
-    # 10. Store in mem0 memory
-    mem0_memory.add(req.message, user_id=str(current_user.id))
-
-    # 11. Auto-summarize every 10 messages
-    msg_count = db.query(models.Message).filter(
-        models.Message.conversation_id == conv.id
-    ).count()
-    if msg_count % 10 == 0:
-        summary_resp = await llm.ainvoke([
-            SystemMessage(content="Summarize this support conversation in 2-3 sentences."),
-            HumanMessage(content=f"Conversation so far:\n{req.message}\n\nAssistant:\n{reply}")
-        ])
-        conv.summary = summary_resp.content
-
-    # 12. Update conversation sentiment avg
-    conv.sentiment_score = (conv.sentiment_score + sentiment["normalized"]) / 2
-    if escalation_needed:
-        conv.escalated = True
-
-    db.commit()
-
-    return ChatResponse(
-        reply=reply,
+    # ── CHANGED: replaced steps 3–12 with a single run_agent() call ──
+    # chat.py handles: sentiment, RAG retrieval, mem0 memory,
+    # LLM generation, DB persistence, auto-summarize, escalation.
+    result = await run_agent(
+        user_message=req.message,
+        user_id=current_user.id,
         session_id=session_id,
         conversation_id=conv.id,
-        sentiment=sentiment,
-        escalation_recommended=escalation_needed,
-        sources=[doc.metadata.get("source", "KB") for doc in vector_results[:2]]
+        db=db,
+        sentiment_history=recent_scores,
+        ticket_id=req.ticket_id or conv.ticket_id,
+        language_override=req.language,
     )
+
+    return ChatResponse(**result)
+
 
 @app.get("/health")
 def health():

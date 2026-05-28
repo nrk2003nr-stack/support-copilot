@@ -1,7 +1,7 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from auth import get_current_user
+from auth import get_current_user, require_role
 import models
 import json
 from datetime import datetime
@@ -36,6 +36,9 @@ class ConnectionManager:
                     self.disconnect(sid)
 
 manager = ConnectionManager()
+
+def _role(user) -> str:
+    return user.role.value if hasattr(user.role, "value") else user.role
 
 @handoff_router.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str, db: Session = Depends(get_db)):
@@ -79,8 +82,11 @@ def escalate_conversation(conversation_id: int, db: Session = Depends(get_db), c
     """Mark a conversation as escalated (creates a high-priority ticket automatically)"""
     conv = db.query(models.Conversation).filter(models.Conversation.id == conversation_id).first()
     if not conv:
-        return {"error": "Conversation not found"}
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if _role(current_user) == "customer" and conv.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
     conv.escalated = True
+    conv.human_active = True
     # Auto-create urgent ticket
     ticket = models.Ticket(
         title=f"Escalated conversation #{conversation_id}",
@@ -91,5 +97,32 @@ def escalate_conversation(conversation_id: int, db: Session = Depends(get_db), c
         conversation_id=conversation_id
     )
     db.add(ticket)
+    db.flush()
+    db.add(models.TicketEvent(ticket_id=ticket.id, actor_id=current_user.id, event_type="handoff.escalated", payload="{}"))
     db.commit()
     return {"message": "Escalated", "ticket_id": ticket.id}
+
+@handoff_router.post("/tickets/{ticket_id}/takeover")
+def take_over(ticket_id: int, db: Session = Depends(get_db), current_user=Depends(require_role("agent", "admin"))):
+    ticket = db.query(models.Ticket).filter(models.Ticket.id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    ticket.assigned_agent_id = current_user.id
+    ticket.status = "in_progress"
+    if ticket.conversation:
+        ticket.conversation.human_active = True
+        ticket.conversation.escalated = True
+    db.add(models.TicketEvent(ticket_id=ticket.id, actor_id=current_user.id, event_type="handoff.takeover", payload="{}"))
+    db.commit()
+    return {"message": "Human handoff active", "ticket_id": ticket.id}
+
+@handoff_router.post("/tickets/{ticket_id}/resume-bot")
+def resume_bot(ticket_id: int, db: Session = Depends(get_db), current_user=Depends(require_role("agent", "admin"))):
+    ticket = db.query(models.Ticket).filter(models.Ticket.id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if ticket.conversation:
+        ticket.conversation.human_active = False
+    db.add(models.TicketEvent(ticket_id=ticket.id, actor_id=current_user.id, event_type="handoff.resume_bot", payload="{}"))
+    db.commit()
+    return {"message": "Bot automation resumed", "ticket_id": ticket.id}

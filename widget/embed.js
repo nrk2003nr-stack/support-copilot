@@ -1,5 +1,6 @@
 (function() {
-  const WIDGET_URL = 'https://your-deployed-frontend-url.com'; // Update this
+  const currentScript = document.currentScript;
+  const WIDGET_URL = currentScript?.dataset.supportCopilotUrl || window.SUPPORT_COPILOT_URL || 'http://localhost:3000';
   const BUBBLE_SIZE = 56;
 
   // Inject bubble styles

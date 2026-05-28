@@ -1,68 +1,109 @@
-import { useState, useRef, useEffect } from 'react';
-import { chatAPI, ticketsAPI } from '../api/client';
-import { Send, Paperclip, AlertCircle, ThumbsUp, ThumbsDown, User } from 'lucide-react';
-import toast from 'react-hot-toast';
+import { useState, useRef, useEffect } from 'react'
+import { chatAPI, ticketsAPI } from '../api/client'
+import { Send, Paperclip, AlertCircle, ThumbsUp, ThumbsDown, User, Mic } from 'lucide-react'
+import toast from 'react-hot-toast'
 
 export default function Chat() {
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [sessionId, setSessionId] = useState(null);
-  const [convId, setConvId] = useState(null);
-  const [imageFile, setImageFile] = useState(null);
-  const [escalationWarning, setEscalationWarning] = useState(false);
-  const bottomRef = useRef(null);
-  const fileInputRef = useRef(null);
+  const [messages, setMessages] = useState([])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [sessionId, setSessionId] = useState(() => localStorage.getItem('session_id'))
+  const [convId, setConvId] = useState(() => {
+    const value = localStorage.getItem('conversation_id')
+    return value ? Number(value) : null
+  })
+  const [ticketId, setTicketId] = useState(null)
+  const [imageFile, setImageFile] = useState(null)
+  const [escalationWarning, setEscalationWarning] = useState(false)
+  const bottomRef = useRef(null)
+  const fileInputRef = useRef(null)
+  const audioInputRef = useRef(null)
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
   const sendMessage = async () => {
-    if (!input.trim() && !imageFile) return;
-    const userMsg = { role: 'user', content: input, image: imageFile?.name };
-    setMessages(prev => [...prev, userMsg]);
-    setLoading(true);
-    setInput('');
+    if (!input.trim() && !imageFile) return
+    const userMsg = { role: 'user', content: input, image: imageFile?.name }
+    setMessages(prev => [...prev, userMsg])
+    setLoading(true)
+    setInput('')
 
     try {
-      let data;
+      let data
       if (imageFile) {
-        const res = await chatAPI.analyzeImage(imageFile, input);
-        data = { reply: res.data.answer, session_id: sessionId || 'img', conversation_id: convId || 0, sentiment: {}, escalation_recommended: false, sources: [] };
-        setImageFile(null);
+        const res = await chatAPI.analyzeImage(imageFile, input)
+        data = { reply: res.data.answer, session_id: sessionId || 'img', conversation_id: convId || 0, sentiment: {}, escalation_recommended: false, sources: [] }
+        setImageFile(null)
       } else {
-        const res = await chatAPI.send(input, sessionId, convId);
-        data = res.data;
-        setSessionId(data.session_id);
-        setConvId(data.conversation_id);
-        if (data.escalation_recommended) setEscalationWarning(true);
+        const res = await chatAPI.send(input, sessionId, convId)
+        data = res.data
+        setSessionId(data.session_id)
+        setConvId(data.conversation_id)
+        setTicketId(data.ticket_id || null)
+        localStorage.setItem('session_id', data.session_id)
+        localStorage.setItem('conversation_id', String(data.conversation_id))
+        if (data.escalation_recommended) setEscalationWarning(true)
       }
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: data.reply,
         sources: data.sources,
         sentiment: data.sentiment
-      }]);
+      }])
     } catch (err) {
-      toast.error('Failed to send message');
+      toast.error('Failed to send message')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const handleEscalate = async () => {
     try {
-      await ticketsAPI.create({
-        title: 'Customer requested human support',
+      const res = await ticketsAPI.create({
+        title: 'Customer escalation from chat',
         description: messages.map(m => `${m.role}: ${m.content}`).join('\n'),
         priority: 'urgent',
-        conversation_id: convId
-      });
-      toast.success('A human agent has been notified. They will reach out shortly.');
-      setEscalationWarning(false);
+        conversation_id: convId,
+        language: 'en',
+      })
+      setTicketId(res.data.id)
+      toast.success('Ticket created. A human agent will contact you shortly.')
+      setEscalationWarning(false)
     } catch {
-      toast.error('Could not escalate. Please try again.');
+      toast.error('Failed to escalate.')
     }
-  };
+  }
+
+  const handleAudio = async (file) => {
+    if (!file) return
+    setLoading(true)
+    try {
+      const res = await chatAPI.transcribe(file)
+      if (res.data.text) {
+        setInput(res.data.text)
+        toast.success('Audio transcribed')
+      } else {
+        toast(res.data.message || 'Voice transcription is disabled locally')
+      }
+    } catch {
+      toast.error('Audio transcription failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const submitQuickFeedback = async (thumbsUp) => {
+    if (!ticketId) {
+      toast('Feedback is available after a ticket is created.')
+      return
+    }
+    try {
+      await ticketsAPI.submitFeedback(ticketId, { rating: thumbsUp ? 5 : 2, thumbs_up: thumbsUp, comment: 'Chat quick feedback' })
+      toast.success('Feedback saved')
+    } catch {
+      toast.error('Could not save feedback')
+    }
+  }
 
   return (
     <div className="flex flex-col h-screen max-w-3xl mx-auto bg-white shadow-xl rounded-xl overflow-hidden">
@@ -82,7 +123,8 @@ export default function Chat() {
         <div className="bg-amber-50 border-b border-amber-200 px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2 text-amber-700 text-sm">
             <AlertCircle size={16} />
-            <span>It seems you may need additional help. Would you like a human agent?</span>
+            <span>It seems you may need additional help. Would you like to speak with an agent?</span>
+            {ticketId && <span className="font-medium">Ticket #{ticketId}</span>}
           </div>
           <button onClick={handleEscalate} className="text-xs bg-amber-600 text-white px-3 py-1.5 rounded-lg hover:bg-amber-700 transition">
             Connect Agent
@@ -95,7 +137,7 @@ export default function Chat() {
         {messages.length === 0 && (
           <div className="text-center text-gray-400 mt-16">
             <p className="text-lg font-medium">How can I help you today?</p>
-            <p className="text-sm mt-1">Ask anything or upload a screenshot of your issue</p>
+            <p className="text-sm mt-1">Ask anything or upload a screenshot</p>
           </div>
         )}
         {messages.map((msg, i) => (
@@ -109,6 +151,16 @@ export default function Chat() {
               <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
               {msg.sources?.length > 0 && (
                 <p className="text-xs mt-2 opacity-60">Sources: {msg.sources.join(', ')}</p>
+              )}
+              {msg.role === 'assistant' && (
+                <div className="flex gap-2 mt-2">
+                  <button onClick={() => submitQuickFeedback(true)} title="Helpful" className="text-gray-400 hover:text-green-500">
+                    <ThumbsUp size={14} />
+                  </button>
+                  <button onClick={() => submitQuickFeedback(false)} title="Not helpful" className="text-gray-400 hover:text-red-500">
+                    <ThumbsDown size={14} />
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -145,6 +197,15 @@ export default function Chat() {
         >
           <Paperclip size={18} />
         </button>
+        <button
+          onClick={() => audioInputRef.current?.click()}
+          className="p-2 text-gray-400 hover:text-indigo-600 transition"
+          title="Voice input"
+        >
+          <Mic size={18} />
+        </button>
+        <input ref={audioInputRef} type="file" accept="audio/*" className="hidden"
+          onChange={e => handleAudio(e.target.files[0])} />
         <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
           onChange={e => setImageFile(e.target.files[0])} />
         <input
@@ -157,11 +218,11 @@ export default function Chat() {
         <button
           onClick={sendMessage}
           disabled={loading}
-          className="bg-indigo-600 text-white p-2.5 rounded-xl hover:bg-indigo-700 transition disabled:opacity-50"
+          className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition disabled:opacity-50"
         >
-          <Send size={16} />
+          <Send size={18} />
         </button>
       </div>
     </div>
-  );
+  )
 }
