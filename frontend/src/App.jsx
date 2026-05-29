@@ -5,12 +5,12 @@ import { Toaster, toast } from 'react-hot-toast'
 import { authAPI } from './api/client'
 import Chat from './components/Chat'
 import Analytics from './components/Analytics'
-import TicketList from './components/TicketList'
+import TicketList from "./components/tickets/TicketList";
 import AgentDashboard from './components/AgentDashboard'
 import AdminPanel from './components/AdminPanel'
 
 function Login({ onAuthed }) {
-  const [form, setForm] = useState({ email: 'customer@example.com', password: 'password123' })
+  const [form, setForm] = useState({ email: 'customer@example.com', password: 'password123', full_name: 'Customer' })
   const [isRegister, setIsRegister] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -19,9 +19,10 @@ function Login({ onAuthed }) {
     setSaving(true)
     try {
       const res = isRegister
-        ? await authAPI.register({ ...form, username: form.email.split('@')[0] })
+        ? await authAPI.register(form)
         : await authAPI.login(form.email, form.password)
       localStorage.setItem('access_token', res.data.access_token)
+      if (res.data.refresh_token) localStorage.setItem('refresh_token', res.data.refresh_token)
       onAuthed(res.data.user)
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Authentication failed')
@@ -35,6 +36,11 @@ function Login({ onAuthed }) {
       <form onSubmit={submit} className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 w-full max-w-sm">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">Support Copilot</h1>
         <p className="text-gray-500 text-sm mb-6">{isRegister ? 'Create your account' : 'Sign in to continue'}</p>
+        {isRegister && (
+          <input value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })}
+            placeholder="Full name" type="text"
+            className="w-full border rounded-lg px-4 py-2.5 mb-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+        )}
         <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
           placeholder="Email" type="email"
           className="w-full border rounded-lg px-4 py-2.5 mb-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />

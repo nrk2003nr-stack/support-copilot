@@ -11,7 +11,7 @@ from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-import models
+from backend import models
 from database import get_db
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")

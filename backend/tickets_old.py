@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_role
 from database import get_db
 from knowledge import add_to_knowledge_base
-import models
+from backend.auth import models as auth_models
+from backend.tickets import models as ticket_models
 from schemas import CreateTicketRequest, FeedbackRequest, TicketCommentRequest, UpdateTicketRequest
 
 ticket_router = APIRouter(prefix="/tickets", tags=["tickets"])

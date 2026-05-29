@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
-const client = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
+const client = readFileSync(new URL('../src/api/client.ts', import.meta.url), 'utf8')
 const chat = readFileSync(new URL('../src/components/Chat.jsx', import.meta.url), 'utf8')
 
 test('authenticated shell has top-right sign out and clears browser state', () => {

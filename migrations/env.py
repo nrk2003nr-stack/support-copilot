@@ -7,27 +7,36 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT))
 
-from database import Base  # noqa: E402
-import models  # noqa: F401,E402
+from backend.core.database import Base  # noqa: E402
+from backend.auth import models as auth_models  # noqa: F401,E402
+from backend.tickets import models as ticket_models  # noqa: F401,E402
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL", "sqlite:///./support.db"))
+config.set_main_option(
+    "sqlalchemy.url",
+    os.getenv("DATABASE_URL", "sqlite:///./support_copilot.db")
+)
+
 target_metadata = Base.metadata
 
-
 def run_migrations_offline():
-    context.configure(url=config.get_main_option("sqlalchemy.url"), target_metadata=target_metadata, literal_binds=True)
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
     with context.begin_transaction():
         context.run_migrations()
 
 
 def run_migrations_online():
-    connectable = engine_from_config(config.get_section(config.config_ini_section), prefix="sqlalchemy.", poolclass=pool.NullPool)
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():

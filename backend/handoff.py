@@ -2,7 +2,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPExce
 from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user, require_role
-import models
+from backend.auth import models as auth_models
+from backend.tickets import models as ticket_models
 import json
 from datetime import datetime
 

@@ -8,8 +8,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { ticketsAPI } from '../api/client'
-import FeedbackWidget from './FeedbackWidget'
+import { ticketsAPI } from '../../api/client'
+import FeedbackWidget from "../FeedbackWidget";
 import {
   Plus, RefreshCw, ChevronDown, ChevronUp,
   Clock, CheckCircle, AlertCircle, User, Tag
@@ -50,7 +50,11 @@ function CreateTicketModal({ onClose, onCreated }) {
     }
     setSaving(true)
     try {
-      const res = await ticketsAPI.create(form)
+      const res = await ticketsAPI.create({
+        title: form.title,
+        initial_message: form.description,
+        priority: form.priority,
+      })
       toast.success('Ticket created successfully!')
       onCreated(res.data)
       onClose()
@@ -244,7 +248,9 @@ function TicketRow({ ticket: initialTicket, isAgent }) {
       {/* Expanded body */}
       {expanded && (
         <div className="px-5 pb-5">
-          <p className="text-sm text-gray-600 leading-relaxed mb-3">{ticket.description}</p>
+          <p className="text-sm text-gray-600 leading-relaxed mb-3">
+            {ticket.description || `${ticket.message_count || 0} message${ticket.message_count === 1 ? '' : 's'} in this ticket.`}
+          </p>
 
           {ticket.resolution_note && (
             <div className="bg-green-50 border border-green-100 rounded-xl p-3 mb-3">
@@ -308,7 +314,7 @@ export default function TicketList({ currentUser }) {
     setTickets(prev => [newTicket, ...prev])
   }
 
-  const filterOptions = ['', 'open', 'in_progress', 'resolved', 'closed']
+  const filterOptions = ['', 'open', 'in_progress', 'pending_agent', 'resolved', 'closed']
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">

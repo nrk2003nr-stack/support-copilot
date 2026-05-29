@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-import models
+from backend.auth import models as auth_models
+from backend.tickets import models as ticket_models
 from auth import hash_password, require_role
 from database import get_db
 

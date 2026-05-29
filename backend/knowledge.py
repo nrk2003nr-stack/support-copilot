@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from auth import require_role
 from database import get_db
-import models
+from backend.auth import models as auth_models
+from backend.tickets import models as ticket_models
 
 CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_db")
 knowledge_router = APIRouter(prefix="/knowledge", tags=["knowledge"])

@@ -5,7 +5,8 @@ from typing import Annotated, Optional, TypedDict
 
 from sqlalchemy.orm import Session
 
-import models
+from backend.auth import models as auth_models
+from backend.tickets import models as ticket_models
 from knowledge import search_knowledge_base
 from sentiment import analyze_sentiment, contains_handoff_request, should_escalate
 

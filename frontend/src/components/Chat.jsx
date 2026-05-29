@@ -23,7 +23,8 @@ export default function Chat() {
 
   const sendMessage = async () => {
     if (!input.trim() && !imageFile) return
-    const userMsg = { role: 'user', content: input, image: imageFile?.name }
+    const messageText = input.trim()
+    const userMsg = { role: 'user', content: messageText, image: imageFile?.name }
     setMessages(prev => [...prev, userMsg])
     setLoading(true)
     setInput('')
@@ -31,15 +32,35 @@ export default function Chat() {
     try {
       let data
       if (imageFile) {
-        const res = await chatAPI.analyzeImage(imageFile, input)
+        const res = await chatAPI.analyzeImage(imageFile, messageText)
         data = { reply: res.data.answer, session_id: sessionId || 'img', conversation_id: convId || 0, sentiment: {}, escalation_recommended: false, sources: [] }
         setImageFile(null)
       } else {
-        const res = await chatAPI.send(input, sessionId, convId)
-        data = res.data
+        let activeTicketId = ticketId
+        if (!activeTicketId) {
+          const created = await ticketsAPI.create({
+            title: messageText.slice(0, 80) || 'Support Request',
+            initial_message: messageText,
+          })
+          activeTicketId = created.data.id
+          setTicketId(activeTicketId)
+        } else {
+          await chatAPI.send(activeTicketId, messageText)
+        }
+
+        const ticketRes = await ticketsAPI.getById(String(activeTicketId))
+        const botMessage = [...(ticketRes.data.messages || [])].reverse().find(m => m.role === 'bot')
+        data = {
+          reply: botMessage?.content || 'Thanks, I created a support ticket and captured your message.',
+          session_id: sessionId || `ticket_${activeTicketId}`,
+          conversation_id: convId || activeTicketId,
+          ticket_id: activeTicketId,
+          sentiment: { normalized: ticketRes.data.sentiment_score },
+          escalation_recommended: ticketRes.data.status === 'pending_agent',
+          sources: botMessage?.sources || [],
+        }
         setSessionId(data.session_id)
         setConvId(data.conversation_id)
-        setTicketId(data.ticket_id || null)
         localStorage.setItem('session_id', data.session_id)
         localStorage.setItem('conversation_id', String(data.conversation_id))
         if (data.escalation_recommended) setEscalationWarning(true)
